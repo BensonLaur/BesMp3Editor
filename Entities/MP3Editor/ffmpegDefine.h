@@ -352,15 +352,14 @@ static const OptionGroupDef groups[] = {
  * @param new_size number of elements to place in reallocated array
  * @return reallocated array
  */
-template<typename T>
-T *grow_array(T *array, int elem_size, int *size, int new_size)
+static void *grow_array(void *array, int elem_size, int *size, int new_size)
 {
     if (new_size >= INT_MAX / elem_size) {
         av_log(NULL, AV_LOG_ERROR, "Array too big.\n");
         exit(1);
     }
     if (*size < new_size) {
-        T *tmp = reinterpret_cast<T *>(av_realloc_array(array, new_size, elem_size));
+        uint8_t *tmp = (uint8_t *)av_realloc_array(array, new_size, elem_size);
         if (!tmp) {
             av_log(NULL, AV_LOG_ERROR, "Could not alloc buffer.\n");
             exit(1);
@@ -372,11 +371,11 @@ T *grow_array(T *array, int elem_size, int *size, int new_size)
     return array;
 }
 
-//#define GROW_ARRAY(array, nb_elems)\
-//    array = grow_array(array, sizeof(*array), &nb_elems, nb_elems + 1)
+#define GROW_ARRAY(array, nb_elems)\
+    array = grow_array(array, sizeof(*array), &nb_elems, nb_elems + 1)
 
 
-class FfmpegParamContext
+typedef struct FfmpegParamContext
 {
 public:
     InputStream **input_streams = NULL;
@@ -384,7 +383,7 @@ public:
     InputFile   **input_files   = NULL;
     int        nb_input_files   = 0;
 
-};
+}FfmpegParamContext;
 
 /**
  * Check if the given stream matches a stream specifier.
@@ -405,6 +404,8 @@ static int check_stream_specifier(AVFormatContext *s, AVStream *st, const char *
 
 static int opt_map(void *optctx, const char *opt, const char *arg, void* paramCtx)
 {
+    {opt = opt;}
+
     FfmpegParamContext * pCtx = reinterpret_cast<FfmpegParamContext *>(paramCtx);
 
     OptionsContext *o = reinterpret_cast<OptionsContext *>(optctx);
@@ -456,7 +457,8 @@ static int opt_map(void *optctx, const char *opt, const char *arg, void* paramCt
         /* this mapping refers to lavfi output */
         const char *c = map + 1;
         //GROW_ARRAY(o->stream_maps, o->nb_stream_maps);
-        o->stream_maps = grow_array(o->stream_maps,sizeof(*o->stream_maps),& o->nb_stream_maps, o->nb_stream_maps+1);
+        o->stream_maps = (StreamMap *)grow_array(o->stream_maps, sizeof(*o->stream_maps), &o->nb_stream_maps, o->nb_stream_maps + 1);
+        //o->stream_maps = grow_array(o->stream_maps,sizeof(*o->stream_maps),& o->nb_stream_maps, o->nb_stream_maps+1);
         m = &o->stream_maps[o->nb_stream_maps - 1];
         m->linklabel = av_get_token(&c, "]");
         if (!m->linklabel) {
@@ -491,7 +493,8 @@ static int opt_map(void *optctx, const char *opt, const char *arg, void* paramCt
                     continue;
                 }
                 //GROW_ARRAY(o->stream_maps, o->nb_stream_maps);
-                o->stream_maps = grow_array(o->stream_maps,sizeof(*o->stream_maps),& o->nb_stream_maps, o->nb_stream_maps+1);
+                o->stream_maps = (StreamMap *)grow_array(o->stream_maps, sizeof(*o->stream_maps), &o->nb_stream_maps, o->nb_stream_maps + 1);
+                //o->stream_maps = grow_array(o->stream_maps,sizeof(*o->stream_maps),& o->nb_stream_maps, o->nb_stream_maps+1);
                 m = &o->stream_maps[o->nb_stream_maps - 1];
 
                 m->file_index   = file_idx;
@@ -524,6 +527,156 @@ static int opt_map(void *optctx, const char *opt, const char *arg, void* paramCt
     av_freep(&map);
     return 0;
 }
+
+//ffmpeg_opt.c
+
+#define MATCH_PER_STREAM_OPT(name, type, outvar, fmtctx, st)\
+{\
+    int i, ret;\
+    for (i = 0; i < o->nb_ ## name; i++) {\
+        char *spec = o->name[i].specifier;\
+        if ((ret = check_stream_specifier(fmtctx, st, spec)) > 0)\
+            outvar = o->name[i].u.type;\
+        else if (ret < 0)\
+            exit(1);\
+    }\
+}
+
+static AVCodec *find_codec_or_die(const char *name, enum AVMediaType type, int encoder)
+{
+    const AVCodecDescriptor *desc;
+    const char *codec_string = encoder ? "encoder" : "decoder";
+    AVCodec *codec;
+
+    codec = encoder ?
+        avcodec_find_encoder_by_name(name) :
+        avcodec_find_decoder_by_name(name);
+
+    if (!codec && (desc = avcodec_descriptor_get_by_name(name))) {
+        codec = encoder ? avcodec_find_encoder(desc->id) :
+                          avcodec_find_decoder(desc->id);
+        if (codec)
+            av_log(NULL, AV_LOG_VERBOSE, "Matched %s '%s' for codec '%s'.\n",
+                   codec_string, codec->name, desc->name);
+    }
+
+    if (!codec) {
+        av_log(NULL, AV_LOG_FATAL, "Unknown %s '%s'\n", codec_string, name);
+        exit(1);
+    }
+    if (codec->type != type) {
+        av_log(NULL, AV_LOG_FATAL, "Invalid %s type '%s'\n", codec_string, name);
+        exit(1);
+    }
+    return codec;
+}
+
+static AVCodec *choose_decoder(OptionsContext *o, AVFormatContext *s, AVStream *st)
+{
+    char *codec_name = NULL;
+
+    //MATCH_PER_STREAM_OPT(codec_names, str, codec_name, s, st);
+    {\
+        int i, ret;\
+        for (i = 0; i < o->nb_codec_names; i++) {\
+            char *spec = o->codec_names[i].specifier;\
+            if ((ret = check_stream_specifier(s, st, spec)) > 0)\
+                codec_name = (char*)o->codec_names[i].u.str;\
+            else if (ret < 0)\
+                exit(1);\
+        }\
+    }
+
+
+    if (codec_name) {
+        AVCodec *codec = find_codec_or_die(codec_name, st->codecpar->codec_type, 0);
+        st->codecpar->codec_id = codec->id;
+        return codec;
+    } else
+        return avcodec_find_decoder(st->codecpar->codec_id);
+}
+
+
+//#include fftools/cmdutils
+
+
+static AVDictionary *filter_codec_opts(AVDictionary *opts, enum AVCodecID codec_id,
+                                AVFormatContext *s, AVStream *st, AVCodec *codec)
+{
+    AVDictionary    *ret = NULL;
+    AVDictionaryEntry *t = NULL;
+    int            flags = s->oformat ? AV_OPT_FLAG_ENCODING_PARAM
+                                      : AV_OPT_FLAG_DECODING_PARAM;
+    char          prefix = 0;
+    const AVClass    *cc = avcodec_get_class();
+
+    if (!codec)
+        codec            = s->oformat ? avcodec_find_encoder(codec_id)
+                                      : avcodec_find_decoder(codec_id);
+
+    switch (st->codecpar->codec_type) {
+    case AVMEDIA_TYPE_VIDEO:
+        prefix  = 'v';
+        flags  |= AV_OPT_FLAG_VIDEO_PARAM;
+        break;
+    case AVMEDIA_TYPE_AUDIO:
+        prefix  = 'a';
+        flags  |= AV_OPT_FLAG_AUDIO_PARAM;
+        break;
+    case AVMEDIA_TYPE_SUBTITLE:
+        prefix  = 's';
+        flags  |= AV_OPT_FLAG_SUBTITLE_PARAM;
+        break;
+    }
+
+    while (t = av_dict_get(opts, "", t, AV_DICT_IGNORE_SUFFIX)) {
+        char *p = strchr(t->key, ':');
+
+        /* check stream specification in opt name */
+        if (p)
+            switch (check_stream_specifier(s, st, p + 1)) {
+            case  1: *p = 0; break;
+            case  0:         continue;
+            default:         exit(1);
+            }
+
+        if (av_opt_find(&cc, t->key, NULL, flags, AV_OPT_SEARCH_FAKE_OBJ) ||
+            !codec ||
+            (codec->priv_class &&
+             av_opt_find(&codec->priv_class, t->key, NULL, flags,
+                         AV_OPT_SEARCH_FAKE_OBJ)))
+            av_dict_set(&ret, t->key, t->value, 0);
+        else if (t->key[0] == prefix &&
+                 av_opt_find(&cc, t->key + 1, NULL, flags,
+                             AV_OPT_SEARCH_FAKE_OBJ))
+            av_dict_set(&ret, t->key + 1, t->value, 0);
+
+        if (p)
+            *p = ':';
+    }
+    return ret;
+}
+
+static AVDictionary **setup_find_stream_info_opts(AVFormatContext *s,
+                                           AVDictionary *codec_opts)
+{
+    unsigned int i;
+    AVDictionary **opts;
+
+    if (!s->nb_streams)
+        return NULL;
+    opts = (AVDictionary **)av_mallocz_array(s->nb_streams, sizeof(*opts));
+    if (!opts) {
+        av_log(NULL, AV_LOG_ERROR,
+               "Could not alloc memory for stream options.\n");
+        return NULL;
+    }
+    for (i = 0; i < s->nb_streams; i++)
+        opts[i] = filter_codec_opts(codec_opts, s->streams[i]->codecpar->codec_id,
+                                    s, s->streams[i], NULL);
+    return opts;
+}
+
 
 
 #endif  //FFMPEG_DEFINI_H

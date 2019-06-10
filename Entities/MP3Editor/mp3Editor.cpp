@@ -21,7 +21,7 @@ void ConvertThread::run()
     buildOptionContent(&octx);
 
     //loglevel
-    av_log_set_flags(1);
+    av_log_set_flags(AV_LOG_SKIP_REPEATED);
     av_log_set_level(AV_LOG_TRACE);
 
     //打开输入的文件（mp3 和 图片）
@@ -36,7 +36,7 @@ void ConvertThread::run()
             init_options(&o);
             o.g = g;
 
-            ret = openInputFile(&o);
+            ret = openInputFile(&o,g->arg);
 
             uninit_options(&o);
 
@@ -131,7 +131,7 @@ void ConvertThread::init_options(OptionsContext *o)
     memset(o, 0, sizeof(*o));
 
     o->stop_time = INT64_MAX;
-    o->mux_max_delay  = 0.7;
+    o->mux_max_delay  = (float)0.7;
     o->start_time     = AV_NOPTS_VALUE;
     o->start_time_eof = AV_NOPTS_VALUE;
     o->recording_time = INT64_MAX;
@@ -149,11 +149,15 @@ void ConvertThread::buildOptionContent(OptionParseContext *octx)
 
     //构建输入项选项
     //#0
-    finish_group(octx,OptGroup::GROUP_INFILE, inputMp3Path.toUtf8());
+    inputMp3Utf8 = inputMp3Path.toUtf8();//保证变量一直存在
+    finish_group(octx,OptGroup::GROUP_INFILE, inputMp3Utf8);
 
     //#1
     if(!customData.imagePath.isEmpty())
-        finish_group(octx,OptGroup::GROUP_INFILE, customData.imagePath.toUtf8());
+    {
+        inputImageUtf8 = customData.imagePath.toUtf8();//保证变量一直存在
+        finish_group(octx,OptGroup::GROUP_INFILE, inputImageUtf8);
+    }
 
     //OptionDef optionMap = { "map", HAS_ARG | OPT_EXPERT | OPT_PERFILE |OPT_OUTPUT,{.func_arg = opt_map}};
     OptionDef optionMap = { "map", HAS_ARG | OPT_EXPERT | OPT_PERFILE |OPT_OUTPUT,opt_map};
@@ -201,8 +205,8 @@ void ConvertThread::buildOptionContent(OptionParseContext *octx)
      //构建输出文件的名称
      QFileInfo fileInfo(inputMp3Path);
      outputMp3Path = fileInfo.dir().absolutePath()+"/"+fileInfo.baseName()+"-converted.mp3";
-
-     finish_group(octx,OptGroup::GROUP_OUTFILE, outputMp3Path.toUtf8());
+     outputMp3Utf8 = outputMp3Path.toUtf8();//保证变量一直存在
+     finish_group(octx,OptGroup::GROUP_OUTFILE, outputMp3Utf8);
 }
 
 void ConvertThread::init_parse_context(OptionParseContext *octx, const OptionGroupDef *groups, int nb_groups)
@@ -227,69 +231,72 @@ void ConvertThread::init_parse_context(OptionParseContext *octx, const OptionGro
 }
 
 
-int ConvertThread::openInputFile(OptionsContext *o)
+int ConvertThread::openInputFile(OptionsContext *o, const char *filename)
 {
+    static int find_stream_info = 1;
+
     InputFile *f;
-    AVFormatContext *ic;
+    AVInputFormat *file_iformat = NULL;
+    int err, ret;
+    unsigned int i;
     int scan_all_pmts_set = 0;
 
-    //分配 AVFormatContext
-    {
-        //AVFormatContext *avformat_alloc_context(void)
-        AVFormatContext *_ic;
-        _ic = reinterpret_cast<AVFormatContext*>(av_malloc(sizeof(AVFormatContext)));
-        if (!_ic)
-        {
-            ic = _ic;
-        }
-        else
-        {
-            avformat_get_context_defaults(_ic);
+    //由于自定义AVFormatContext 创建内容时，需要用到 ->av_class = &av_format_context_class
+    // 而 av_format_context_class 在 FFmpeg\libavformat\options.c 中定义，不打算搬运过来
+    //所以 由后面 avformat_open_input 支持的方式自动分配
 
-//            _ic->internal = reinterpret_cast<AVFormatInternal*>(av_mallocz(sizeof(*_ic->internal)));
-//            if (!_ic->internal) {
-//                avformat_free_context(_ic);
-//                ic = NULL;
-//            }
-//            else
-//            {
-//                _ic->internal->offset = AV_NOPTS_VALUE;
-//                _ic->internal->raw_packet_buffer_remaining_size = RAW_PACKET_BUFFER_SIZE;
-//                _ic->internal->shortest_end = AV_NOPTS_VALUE;
-//                ic = _ic;
-//            }
-            ic = _ic;
-        }
-
-        if(!ic)
-            return -1;
-    }
-
-    //初始化 AVFormatContext* ic
-    ic->video_codec_id     = AV_CODEC_ID_NONE;
-    ic->audio_codec_id     = AV_CODEC_ID_NONE;
-    ic->subtitle_codec_id  = AV_CODEC_ID_NONE;
-    ic->data_codec_id      = AV_CODEC_ID_NONE;
-
-    //ic->interrupt_callback = int_cb;
+    AVFormatContext *ic = NULL;
 
     if (!av_dict_get(o->g->format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE)) {
         av_dict_set(&o->g->format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
         scan_all_pmts_set = 1;
     }
 
-    //下一步复制：
-    //static int open_input_file(OptionsContext *o, const char *filename)
     /* open the input file with generic avformat function */
-
+    err = avformat_open_input(&ic, filename, file_iformat, &o->g->format_opts);
+    if (err < 0) {
+       print_error(filename, err);
+       if (err == AVERROR_PROTOCOL_NOT_FOUND)
+           av_log(NULL, AV_LOG_ERROR, "Did you mean file:%s?\n", filename);
+       exit(1);
+    }
+    if (scan_all_pmts_set)
+        av_dict_set(&o->g->format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE);
+    remove_avoptions(&o->g->format_opts, o->g->codec_opts);
+    assert_avoptions(o->g->format_opts);
 
     /* apply forced codec ids */
+    for (i = 0; i < ic->nb_streams; i++)
+        choose_decoder(o, ic, ic->streams[i]);
 
+    if (find_stream_info) {
+        AVDictionary **opts = setup_find_stream_info_opts(ic, o->g->codec_opts);
+        unsigned int orig_nb_streams = ic->nb_streams;
+
+        /* If not enough info to get the stream parameters, we decode the
+           first frames to get it. (used in mpeg case for example) */
+        ret = avformat_find_stream_info(ic, opts);
+
+        for (i = 0; i < orig_nb_streams; i++)
+            av_dict_free(&opts[i]);
+        av_freep(&opts);
+
+        if (ret < 0) {
+            av_log(NULL, AV_LOG_FATAL, "%s: could not find codec parameters\n", filename);
+            if (ic->nb_streams == 0) {
+                avformat_close_input(&ic);
+                exit(1);
+            }
+        }
+    }
+
+    //TODO Next: [static int open_input_file(OptionsContext *o, const char *filename)]
 
     /* update the current parameters so that they match the one of the input stream */
-
+    //add_input_streams(o, ic);
 
     /* dump the file content */
+    av_dump_format(ic, paramCtx.nb_input_files, filename, 0);
 
     /* 构建 InputFile *f ，存储到 paramCtx.input_files */
 
@@ -329,7 +336,7 @@ void ConvertThread::finish_group(OptionParseContext *octx, int group_idx, const 
     OptionGroup *g;
 
     //GROW_ARRAY(l->groups, l->nb_groups);
-    l->groups = grow_array(l->groups, sizeof(*l->groups), &l->nb_groups, l->nb_groups + 1);
+    l->groups = (OptionGroup *)grow_array(l->groups, sizeof(*l->groups), &l->nb_groups, l->nb_groups + 1);
 
     g = &l->groups[l->nb_groups - 1];
 
@@ -361,12 +368,40 @@ void ConvertThread::add_opt(OptionParseContext *octx, const OptionDef *opt, cons
     OptionGroup *g = &octx->cur_group;
 
     //GROW_ARRAY(g->opts, g->nb_opts);
-    g->opts = grow_array(g->opts, sizeof(*g->opts), &g->nb_opts, g->nb_opts + 1);
+    g->opts = (Option*)grow_array(g->opts, sizeof(*g->opts), &g->nb_opts, g->nb_opts + 1);
 
 
     g->opts[g->nb_opts - 1].opt = opt;
     g->opts[g->nb_opts - 1].key = key;
     g->opts[g->nb_opts - 1].val = val;
+}
+
+void ConvertThread::print_error(const char *filename, int err)
+{
+    char errbuf[128];
+    const char *errbuf_ptr = errbuf;
+
+    if (av_strerror(err, errbuf, sizeof(errbuf)) < 0)
+        errbuf_ptr = strerror(AVUNERROR(err));
+    av_log(NULL, AV_LOG_ERROR, "%s: %s\n", filename, errbuf_ptr);
+}
+
+void ConvertThread::remove_avoptions(AVDictionary **a, AVDictionary *b)
+{
+    AVDictionaryEntry *t = NULL;
+
+    while ((t = av_dict_get(b, "", t, AV_DICT_IGNORE_SUFFIX))) {
+        av_dict_set(a, t->key, NULL, AV_DICT_MATCH_CASE);
+    }
+}
+
+void ConvertThread::assert_avoptions(AVDictionary *m)
+{
+    AVDictionaryEntry *t;
+    if ((t = av_dict_get(m, "", NULL, AV_DICT_IGNORE_SUFFIX))) {
+        av_log(NULL, AV_LOG_FATAL, "Option %s not found.\n", t->key);
+        exit(1);
+    }
 }
 
 

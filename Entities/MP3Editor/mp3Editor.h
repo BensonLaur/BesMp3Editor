@@ -8,7 +8,9 @@
 #include <QTimer>
 #include <QMutex>
 
-#include "ffmpegDefine.h"
+extern "C" {
+    #include "ffmpegDefine.h"
+}
 
 class CustomMp3Data
 {
@@ -60,7 +62,7 @@ private:
     void init_parse_context(OptionParseContext *octx,
                             const OptionGroupDef *groups, int nb_groups);
 
-    int openInputFile(OptionsContext *o);
+    int openInputFile(OptionsContext *o, const char *filename);
     int openOutputFile();
     int transcode();
 
@@ -84,9 +86,19 @@ private:
                         const char *key, const char *val);
 
 
+    void print_error(const char *filename, int err);
+
+
+    void remove_avoptions(AVDictionary **a, AVDictionary *b);
+
+    void assert_avoptions(AVDictionary *m);
 private:
     QString inputMp3Path;
     CustomMp3Data customData;
+
+    QByteArray inputMp3Utf8;
+    QByteArray inputImageUtf8;
+    QByteArray outputMp3Utf8;
 
     QString outputMp3Path;
 private:
