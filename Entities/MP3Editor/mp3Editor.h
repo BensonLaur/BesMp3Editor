@@ -47,7 +47,7 @@ private:
     void ReleaseAll();
 
     //初始化选项内容（仿造ffmpeg.exe）
-    void initOptionParseContent();
+    int ffmpeg_parse_options();
 
     void init_opts(void);
     void uninit_opts(void);
@@ -62,8 +62,11 @@ private:
     void init_parse_context(OptionParseContext *octx,
                             const OptionGroupDef *groups, int nb_groups);
 
-    int openInputFile(OptionsContext *o, const char *filename);
-    int openOutputFile();
+    void add_input_streams(OptionsContext *o, AVFormatContext *ic);
+
+    int open_files(OptionGroupList *l, bool isInput);
+    int open_input_file(OptionsContext *o, const char *filename);
+    int open_output_file(OptionsContext *o, const char *filename);
     int transcode();
 
 private:
@@ -92,6 +95,9 @@ private:
     void remove_avoptions(AVDictionary **a, AVDictionary *b);
 
     void assert_avoptions(AVDictionary *m);
+
+
+
 private:
     QString inputMp3Path;
     CustomMp3Data customData;
@@ -105,6 +111,15 @@ private:
     AVDictionary *sws_dict;
     AVDictionary *swr_opts;
     AVDictionary *format_opts, *codec_opts, *resample_opts;
+
+#define OFFSET(x) offsetof(OptionsContext, x)
+    OptionDef optionMap = { "map", HAS_ARG | OPT_EXPERT | OPT_PERFILE |OPT_OUTPUT,opt_map};
+    OptionDef optionCodecName = { "c", HAS_ARG | OPT_STRING | OPT_SPEC |
+            OPT_INPUT | OPT_OUTPUT, (void*)OFFSET(codec_names)};//{ .off       = OFFSET(codec_names) }};
+    OptionDef optionMetadata = { "metadata",
+                                 HAS_ARG | OPT_STRING | OPT_SPEC | OPT_OUTPUT, (void*)OFFSET(metadata),//{ .off = OFFSET(metadata) },
+            "add metadata", "string=string" };
+
 
     FfmpegParamContext paramCtx;
 };

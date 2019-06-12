@@ -22,6 +22,10 @@ extern "C"
 #include "libavutil/opt.h"
 #include "libavutil/mem.h"
 #include "libavutil/avstring.h"
+#include "libavutil/intreadwrite.h"
+#include "libavutil/parseutils.h"
+#include "libavutil/pixdesc.h"
+#include "libavutil/eval.h"
 #include "SDL.h"
 }
 
@@ -283,11 +287,29 @@ typedef struct OptionsContext {
     int64_t start_time;
     int64_t start_time_eof;
 
+    SpecifierOpt *frame_rates;
+    int        nb_frame_rates;
+
     SpecifierOpt *codec_names;
     int        nb_codec_names;
 
     /* input options */
+    int64_t input_ts_offset;
+    int loop;
+    int rate_emu;
     int accurate_seek;
+
+    SpecifierOpt *ts_scale;
+    int        nb_ts_scale;
+
+    SpecifierOpt *hwaccels;
+    int        nb_hwaccels;
+    SpecifierOpt *hwaccel_devices;
+    int        nb_hwaccel_devices;
+    SpecifierOpt *hwaccel_output_formats;
+    int        nb_hwaccel_output_formats;
+    SpecifierOpt *autorotate;
+    int        nb_autorotate;
 
     /* output options */
     StreamMap *stream_maps;
@@ -300,12 +322,34 @@ typedef struct OptionsContext {
     uint64_t limit_filesize;
     float mux_max_delay;
 
+    int bitexact;
+
+    int video_disable;
+    int audio_disable;
+    int subtitle_disable;
+    int data_disable;
+
     /* indexed by output file stream index */
     int   *streamid_map;
     int nb_streamid_map;
 
     SpecifierOpt *metadata;
     int        nb_metadata;
+
+    SpecifierOpt *codec_tags;
+    int        nb_codec_tags;
+
+    SpecifierOpt *top_field_first;
+    int        nb_top_field_first;
+
+    SpecifierOpt *reinit_filters;
+    int        nb_reinit_filters;
+
+    SpecifierOpt *guess_layout_max;
+    int        nb_guess_layout_max;
+
+    SpecifierOpt *discard;
+    int        nb_discard;
 
 }OptionsContext;
 
@@ -374,6 +418,10 @@ static void *grow_array(void *array, int elem_size, int *size, int new_size)
 #define GROW_ARRAY(array, nb_elems)\
     array = grow_array(array, sizeof(*array), &nb_elems, nb_elems + 1)
 
+#define GROW_ARRAY_2(array, nb_elems, baseType)\
+{\
+    array = (baseType*)grow_array(array, sizeof(*array), &nb_elems, nb_elems + 1);\
+}
 
 typedef struct FfmpegParamContext
 {
@@ -383,6 +431,10 @@ public:
     InputFile   **input_files   = NULL;
     int        nb_input_files   = 0;
 
+    int copy_ts           = 0;
+    int start_at_zero     = 0;
+
+    int input_stream_potentially_available = 0;
 }FfmpegParamContext;
 
 /**
@@ -456,9 +508,7 @@ static int opt_map(void *optctx, const char *opt, const char *arg, void* paramCt
     if (map[0] == '[') {
         /* this mapping refers to lavfi output */
         const char *c = map + 1;
-        //GROW_ARRAY(o->stream_maps, o->nb_stream_maps);
-        o->stream_maps = (StreamMap *)grow_array(o->stream_maps, sizeof(*o->stream_maps), &o->nb_stream_maps, o->nb_stream_maps + 1);
-        //o->stream_maps = grow_array(o->stream_maps,sizeof(*o->stream_maps),& o->nb_stream_maps, o->nb_stream_maps+1);
+        GROW_ARRAY_2(o->stream_maps, o->nb_stream_maps, StreamMap);
         m = &o->stream_maps[o->nb_stream_maps - 1];
         m->linklabel = av_get_token(&c, "]");
         if (!m->linklabel) {
@@ -492,9 +542,7 @@ static int opt_map(void *optctx, const char *opt, const char *arg, void* paramCt
                     disabled = 1;
                     continue;
                 }
-                //GROW_ARRAY(o->stream_maps, o->nb_stream_maps);
-                o->stream_maps = (StreamMap *)grow_array(o->stream_maps, sizeof(*o->stream_maps), &o->nb_stream_maps, o->nb_stream_maps + 1);
-                //o->stream_maps = grow_array(o->stream_maps,sizeof(*o->stream_maps),& o->nb_stream_maps, o->nb_stream_maps+1);
+                GROW_ARRAY_2(o->stream_maps, o->nb_stream_maps,StreamMap);
                 m = &o->stream_maps[o->nb_stream_maps - 1];
 
                 m->file_index   = file_idx;
@@ -542,6 +590,13 @@ static int opt_map(void *optctx, const char *opt, const char *arg, void* paramCt
     }\
 }
 
+//MATCH_PER_STREAM_OPT 中 uint8_t* 无法转为 char* 时使用 MATCH_PER_STREAM_OPT_2
+#define MATCH_PER_STREAM_OPT_2(name, type, outvar, fmtctx, st)\
+{\
+    uint8_t** temp_uint8_t = (uint8_t**)&outvar;\
+    MATCH_PER_STREAM_OPT(name, type, *temp_uint8_t, fmtctx, st)\
+}
+
 static AVCodec *find_codec_or_die(const char *name, enum AVMediaType type, int encoder)
 {
     const AVCodecDescriptor *desc;
@@ -575,18 +630,7 @@ static AVCodec *choose_decoder(OptionsContext *o, AVFormatContext *s, AVStream *
 {
     char *codec_name = NULL;
 
-    //MATCH_PER_STREAM_OPT(codec_names, str, codec_name, s, st);
-    {\
-        int i, ret;\
-        for (i = 0; i < o->nb_codec_names; i++) {\
-            char *spec = o->codec_names[i].specifier;\
-            if ((ret = check_stream_specifier(s, st, spec)) > 0)\
-                codec_name = (char*)o->codec_names[i].u.str;\
-            else if (ret < 0)\
-                exit(1);\
-        }\
-    }
-
+    MATCH_PER_STREAM_OPT_2(codec_names, str, codec_name, s, st);
 
     if (codec_name) {
         AVCodec *codec = find_codec_or_die(codec_name, st->codecpar->codec_type, 0);
@@ -596,6 +640,23 @@ static AVCodec *choose_decoder(OptionsContext *o, AVFormatContext *s, AVStream *
         return avcodec_find_decoder(st->codecpar->codec_id);
 }
 
+/* return a copy of the input with the stream specifiers removed from the keys */
+static AVDictionary *strip_specifiers(AVDictionary *dict)
+{
+    AVDictionaryEntry *e = NULL;
+    AVDictionary    *ret = NULL;
+
+    while ((e = av_dict_get(dict, "", e, AV_DICT_IGNORE_SUFFIX))) {
+        char *p = strchr(e->key, ':');
+
+        if (p)
+            *p = 0;
+        av_dict_set(&ret, e->key, e->value, 0);
+        if (p)
+            *p = ':';
+    }
+    return ret;
+}
 
 //#include fftools/cmdutils
 
@@ -677,6 +738,149 @@ static AVDictionary **setup_find_stream_info_opts(AVFormatContext *s,
     return opts;
 }
 
+
+static double parse_number_or_die(const char *context, const char *numstr, int type,
+                           double min, double max)
+{
+    char *tail;
+    const char *error;
+    double d = av_strtod(numstr, &tail);
+    if (*tail)
+        error = "Expected number for %s but found: %s\n";
+    else if (d < min || d > max)
+        error = "The value for %s was %s which is not within %f - %f\n";
+    else if (type == OPT_INT64 && (int64_t)d != d)
+        error = "Expected int64 for %s but found %s\n";
+    else if (type == OPT_INT && (int)d != d)
+        error = "Expected int for %s but found %s\n";
+    else
+        return d;
+    av_log(NULL, AV_LOG_FATAL, error, context, numstr, min, max);
+    exit(1);
+    return 0;
+}
+
+static int64_t parse_time_or_die(const char *context, const char *timestr,
+                          int is_duration)
+{
+    int64_t us;
+    if (av_parse_time(&us, timestr, is_duration) < 0) {
+        av_log(NULL, AV_LOG_FATAL, "Invalid %s specification for %s: %s\n",
+               is_duration ? "duration" : "date", context, timestr);
+        exit(1);
+    }
+    return us;
+}
+
+static int write_option(void *optctx, const OptionDef *po, const char *opt,
+                        const char *arg, void* paramCtx)
+{
+    /* new-style options contain an offset into optctx, old-style address of
+     * a global var*/
+    void *dst = po->flags & (OPT_OFFSET | OPT_SPEC) ?
+                (uint8_t *)optctx + po->u.off : po->u.dst_ptr;
+    int *dstcount;
+
+    if (po->flags & OPT_SPEC) {
+        SpecifierOpt **so = (SpecifierOpt **)dst;
+        const char *p = strchr(opt, ':');
+        char *str;
+
+        dstcount = (int *)(so + 1);
+        *so = (SpecifierOpt *)grow_array(*so, sizeof(**so), dstcount, *dstcount + 1);
+        str = av_strdup(p ? p + 1 : "");
+        if (!str)
+            return AVERROR(ENOMEM);
+        (*so)[*dstcount - 1].specifier = str;
+        dst = &(*so)[*dstcount - 1].u;
+    }
+
+    if (po->flags & OPT_STRING) {
+        char *str;
+        str = av_strdup(arg);
+        av_freep(dst);
+        if (!str)
+            return AVERROR(ENOMEM);
+        *(char **)dst = str;
+    } else if (po->flags & OPT_BOOL || po->flags & OPT_INT) {
+        *(int *)dst = (int)parse_number_or_die(opt, arg, OPT_INT64, INT_MIN, INT_MAX);
+    } else if (po->flags & OPT_INT64) {
+        *(int64_t *)dst = (int64_t)parse_number_or_die(opt, arg, (int)OPT_INT64, (double)INT64_MIN, (double)INT64_MAX);
+    } else if (po->flags & OPT_TIME) {
+        *(int64_t *)dst = parse_time_or_die(opt, arg, 1);
+    } else if (po->flags & OPT_FLOAT) {
+        *(float *)dst = parse_number_or_die(opt, arg, OPT_FLOAT, -INFINITY, INFINITY);
+    } else if (po->flags & OPT_DOUBLE) {
+        *(double *)dst = parse_number_or_die(opt, arg, OPT_DOUBLE, -INFINITY, INFINITY);
+    } else if (po->u.func_arg) {
+        int ret = po->u.func_arg(optctx, opt, arg,(void*)paramCtx);
+        if (ret < 0) {
+            char errString[AV_ERROR_MAX_STRING_SIZE];
+            av_log(NULL, AV_LOG_ERROR,
+                   "Failed to set value '%s' for option '%s': %s\n",
+                   arg, opt, av_make_error_string(errString, AV_ERROR_MAX_STRING_SIZE, ret));
+            return ret;
+        }
+    }
+    if (po->flags & OPT_EXIT)
+        exit(0);
+
+    return 0;
+}
+
+static int parse_optgroup(void *optctx, OptionGroup *g, void* paramCtx)
+{
+    int i, ret;
+
+    av_log(NULL, AV_LOG_DEBUG, "Parsing a group of options: %s %s.\n",
+           g->group_def->name, g->arg);
+
+    for (i = 0; i < g->nb_opts; i++) {
+        Option *o = &g->opts[i];
+
+        if (g->group_def->flags &&
+            !(g->group_def->flags & o->opt->flags)) {
+            av_log(NULL, AV_LOG_ERROR, "Option %s (%s) cannot be applied to "
+                   "%s %s -- you are trying to apply an input option to an "
+                   "output file or vice versa. Move this option before the "
+                   "file it belongs to.\n", o->key, o->opt->help,
+                   g->group_def->name, g->arg);
+            return AVERROR(EINVAL);
+        }
+
+        av_log(NULL, AV_LOG_DEBUG, "Applying option %s (%s) with argument %s.\n",
+               o->key, o->opt->help, o->val);
+
+        ret = write_option(optctx, o->opt, o->key, o->val,(void*)paramCtx);
+        if (ret < 0)
+            return ret;
+    }
+
+    av_log(NULL, AV_LOG_DEBUG, "Successfully parsed a group of options.\n");
+
+    return 0;
+}
+
+//#include fftools/ffmpeg.c
+static int guess_input_channel_layout(InputStream *ist)
+{
+    AVCodecContext *dec = ist->dec_ctx;
+
+    if (!dec->channel_layout) {
+        char layout_name[256];
+
+        if (dec->channels > ist->guess_layout_max)
+            return 0;
+        dec->channel_layout = av_get_default_channel_layout(dec->channels);
+        if (!dec->channel_layout)
+            return 0;
+        av_get_channel_layout_string(layout_name, sizeof(layout_name),
+                                     dec->channels, dec->channel_layout);
+        av_log(NULL, AV_LOG_WARNING, "Guessed Channel Layout for Input Stream "
+               "#%d.%d : %s\n", ist->file_index, ist->st->index, layout_name);
+    }
+    return 1;
+}
 
 
 #endif  //FFMPEG_DEFINI_H
