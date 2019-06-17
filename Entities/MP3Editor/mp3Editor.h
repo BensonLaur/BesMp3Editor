@@ -106,6 +106,10 @@ private:
     QByteArray inputImageUtf8;
     QByteArray outputMp3Utf8;
 
+    QByteArray mataArtistUtf8;
+    QByteArray mataTitleUtf8;
+    QByteArray mataAlbumUtf8;
+
     QString outputMp3Path;
 private:
     AVDictionary *sws_dict;

@@ -170,16 +170,16 @@ void ConvertThread::buildOptionContent(OptionParseContext *octx)
     if( !customData.artist.isEmpty()|| !customData.title.isEmpty()||!customData.album.isEmpty())
     {
          if(!customData.artist.isEmpty()){
-             add_opt(octx,&optionMetadata,"metadata",
-                     QString("artist="+customData.artist).toUtf8());
+             mataArtistUtf8 = QString("artist="+customData.artist).toUtf8();
+             add_opt(octx,&optionMetadata,"metadata",mataArtistUtf8);
          }
          if(!customData.title.isEmpty()){
-             add_opt(octx,&optionMetadata,"metadata",
-                     QString("title="+customData.title).toUtf8());
+             mataTitleUtf8 = QString("title="+customData.title).toUtf8();
+             add_opt(octx,&optionMetadata,"metadata",mataTitleUtf8);
          }
          if(!customData.album.isEmpty()){
-             add_opt(octx,&optionMetadata,"metadata",
-                     QString("album="+customData.album).toUtf8());
+             mataAlbumUtf8 = QString("album="+customData.album).toUtf8();
+             add_opt(octx,&optionMetadata,"metadata",mataAlbumUtf8);
          }
     }
 
@@ -541,7 +541,7 @@ int ConvertThread::open_input_file(OptionsContext *o, const char *filename)
 
 int ConvertThread::open_output_file(OptionsContext *o, const char *filename)
 {
-    //TODO
+    //TODO open_output_file
 
     return -1;
 }
