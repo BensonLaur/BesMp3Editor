@@ -68,6 +68,7 @@ int ConvertThread::ffmpeg_parse_options()
     }
 
 fail:
+    //#TODO#TODO uninit_parse_context
     //uninit_parse_context(&octx);
     if (ret < 0) {
         av_strerror(ret, error, sizeof(error));
@@ -396,8 +397,6 @@ int ConvertThread::open_files(OptionGroupList *l,bool isInput)
         init_options(&o);
         o.g = g;
 
-        //TODO 详细了解 ffmpeg 模块中（write_option 的 opt_map实际做了什么）
-        //TODO 解决后，搬运 open_output_file
         ret = parse_optgroup(&o, g, (void*)&paramCtx);
         if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Error parsing options for %s file "
@@ -412,7 +411,7 @@ int ConvertThread::open_files(OptionGroupList *l,bool isInput)
         else
             ret = open_output_file(&o, g->arg);
 
-        uninit_options(&o);
+        uninit_options(&o); //#TODO#TODO 这里是否正确释放？待确认检查
         if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Error opening %s file %s.\n",
                    inout, g->arg);
@@ -541,13 +540,248 @@ int ConvertThread::open_input_file(OptionsContext *o, const char *filename)
 
 int ConvertThread::open_output_file(OptionsContext *o, const char *filename)
 {
-    //TODO open_output_file
+    AVFormatContext *oc;
+    int i,  err;//j,
+    OutputFile *of;
+    InputStream  *ist;
+    OutputStream *ost;
+    AVDictionaryEntry *e = NULL;
+    int format_flags = 0;
 
-    return -1;
+    if (o->stop_time != INT64_MAX && o->recording_time != INT64_MAX) {
+        o->stop_time = INT64_MAX;
+        av_log(NULL, AV_LOG_WARNING, "-t and -to cannot be used together; using -t.\n");
+    }
+
+    GROW_ARRAY_2(paramCtx.output_files, paramCtx.nb_output_files,OutputFile*);
+    of = (OutputFile*)av_mallocz(sizeof(*of));
+    if (!of)
+        exit(1);
+
+    paramCtx.output_files[paramCtx.nb_output_files - 1] = of;
+    of->ost_index      = paramCtx.nb_output_streams;
+    of->recording_time = o->recording_time;
+    of->start_time     = o->start_time;
+    of->limit_filesize = o->limit_filesize;
+    of->shortest       = o->shortest;
+    av_dict_copy(&of->opts, o->g->format_opts, 0);
+
+    err = avformat_alloc_output_context2(&oc, NULL, o->format, filename);
+    if (!oc) {
+        print_error(filename, err);
+        exit(1);
+    }
+
+    of->ctx = oc;
+    if (o->recording_time != INT64_MAX)
+        oc->duration = o->recording_time;
+
+    //oc->interrupt_callback = int_cb;
+
+    e = av_dict_get(o->g->format_opts, "fflags", NULL, 0);
+    if (e) {
+        const AVOption *o = av_opt_find(oc, "fflags", NULL, 0, 0);
+        av_opt_eval_flags(oc, o, e->value, &format_flags);
+    }
+    if (o->bitexact) {
+        format_flags |= AVFMT_FLAG_BITEXACT;
+        oc->flags    |= AVFMT_FLAG_BITEXACT;
+    }
+
+    if (!o->nb_stream_maps)
+    {
+        //不搬运这部分逻辑
+    }
+    else
+    {
+        for (i = 0; i < o->nb_stream_maps; i++) {
+           StreamMap *map = &o->stream_maps[i];
+
+           if (map->disabled)
+               continue;
+
+           if (map->linklabel)
+           {
+               //不搬运这部分逻辑
+           }
+           else
+           {
+               int src_idx = paramCtx.input_files[map->file_index]->ist_index + map->stream_index;
+
+               ist = paramCtx.input_streams[paramCtx.input_files[map->file_index]->ist_index + map->stream_index];
+
+               if (ist->user_set_discard == AVDISCARD_ALL) {
+                   av_log(NULL, AV_LOG_FATAL, "Stream #%d:%d is disabled and cannot be mapped.\n",
+                          map->file_index, map->stream_index);
+                   exit(1);
+               }
+               if(o->subtitle_disable && ist->st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
+                   continue;
+               if(o->   audio_disable && ist->st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+                   continue;
+               if(o->   video_disable && ist->st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+                   continue;
+               if(o->    data_disable && ist->st->codecpar->codec_type == AVMEDIA_TYPE_DATA)
+                   continue;
+
+               ost = NULL;
+               switch (ist->st->codecpar->codec_type) {
+               case AVMEDIA_TYPE_VIDEO:      ost = new_video_stream     (o, oc, src_idx,&paramCtx); break;
+               case AVMEDIA_TYPE_AUDIO:      ost = new_audio_stream     (o, oc, src_idx,&paramCtx); break;
+               default:
+                    av_log(NULL, true/*ignore_unknown_streams*/ ? AV_LOG_WARNING : AV_LOG_FATAL,
+                           "Cannot map stream #%d:%d - unsupported type.\n",
+                           map->file_index, map->stream_index);
+               }
+               if (ost)
+                    ost->sync_ist = paramCtx.input_streams[  paramCtx.input_files[map->sync_file_index]->ist_index
+                                                                 + map->sync_stream_index];
+           }
+        }
+    }
+
+    /* handle attached files */
+    //不搬运
+
+#if FF_API_LAVF_AVCTX
+    for (i = paramCtx.nb_output_streams - oc->nb_streams; i < paramCtx.nb_output_streams; i++) { //for all streams of this output file
+        AVDictionaryEntry *e;
+        ost = paramCtx.output_streams[i];
+
+        if ((ost->stream_copy || ost->attachment_filename)
+            && (e = av_dict_get(o->g->codec_opts, "flags", NULL, AV_DICT_IGNORE_SUFFIX))
+            && (!e->key[5] || check_stream_specifier(oc, ost->st, e->key+6)))
+            if (av_opt_set(ost->st->codec, "flags", e->value, 0) < 0)
+                exit(1);
+    }
+#endif
+
+    /* check if all codec options have been used */
+    //不搬运
+
+    /* set the decoding_needed flags and create simple filtergraphs */
+    //不搬运
+
+    /* check filename in case of an image number is expected */
+    //不搬运
+
+    if (!(oc->oformat->flags & AVFMT_NOFILE)) {
+        /* test if it already exists to avoid losing precious files */
+        assert_file_overwrite(filename);
+
+        /* open the file */
+        if ((err = avio_open2(&oc->pb, filename, AVIO_FLAG_WRITE,
+                              &oc->interrupt_callback,
+                              &of->opts)) < 0) {
+            print_error(filename, err);
+            exit(1);
+        }
+    } else if (strcmp(oc->oformat->name, "image2")==0 && !av_filename_number_test(filename))
+        assert_file_overwrite(filename);
+
+//    if (o->mux_preload) {
+//        av_dict_set_int(&of->opts, "preload", o->mux_preload*AV_TIME_BASE, 0);
+//    }
+    oc->max_delay = (int)(o->mux_max_delay * AV_TIME_BASE);
+
+    /* copy metadata */
+    //不搬运
+
+    /* copy chapters */
+    //不搬运
+
+
+    /* copy global metadata by default */
+    if (!o->metadata_global_manual && paramCtx.nb_input_files){
+        av_dict_copy(&oc->metadata, paramCtx.input_files[0]->ctx->metadata,
+                     AV_DICT_DONT_OVERWRITE);
+        if(o->recording_time != INT64_MAX)
+            av_dict_set(&oc->metadata, "duration", NULL, 0);
+        av_dict_set(&oc->metadata, "creation_time", NULL, 0);
+    }
+    if (!o->metadata_streams_manual)
+        for (i = of->ost_index; i < paramCtx.nb_output_streams; i++) {
+            InputStream *ist;
+            if (paramCtx.output_streams[i]->source_index < 0)         /* this is true e.g. for attached files */
+                continue;
+            ist = paramCtx.input_streams[paramCtx.output_streams[i]->source_index];
+            av_dict_copy(&paramCtx.output_streams[i]->st->metadata, ist->st->metadata, AV_DICT_DONT_OVERWRITE);
+            if (!paramCtx.output_streams[i]->stream_copy) {
+                av_dict_set(&paramCtx.output_streams[i]->st->metadata, "encoder", NULL, 0);
+            }
+        }
+
+    /* process manually set programs */
+
+    /* process manually set metadata */
+    for (i = 0; i < o->nb_metadata; i++) {
+            AVDictionary **m;
+            char type, *val;
+            const char *stream_spec;
+            int index = 0,ret = 0;
+            unsigned int j;
+
+            val = strchr((char*)o->metadata[i].u.str, '=');
+            if (!val) {
+                av_log(NULL, AV_LOG_FATAL, "No '=' character in metadata string %s.\n",
+                       o->metadata[i].u.str);
+                exit(1);
+            }
+            *val++ = 0;
+
+            parse_meta_type(o->metadata[i].specifier, &type, &index, &stream_spec);
+            if (type == 's') {
+                for (j = 0; j < oc->nb_streams; j++) {
+                    ost = paramCtx.output_streams[paramCtx.nb_output_streams - oc->nb_streams + j];
+                    if ((ret = check_stream_specifier(oc, oc->streams[j], stream_spec)) > 0) {
+                        if (!strcmp((char*)o->metadata[i].u.str, "rotate")) {
+                            char *tail;
+                            double theta = av_strtod(val, &tail);
+                            if (!*tail) {
+                                ost->rotate_overridden = 1;
+                                ost->rotate_override_value = theta;
+                            }
+                        } else {
+                            av_dict_set(&oc->streams[j]->metadata, (char*)o->metadata[i].u.str, *val ? val : NULL, 0);
+                        }
+                    } else if (ret < 0)
+                        exit(1);
+                }
+            }
+            else {
+                switch (type) {
+                case 'g':
+                    m = &oc->metadata;
+                    break;
+                case 'c':
+                    if (index < 0 || index >= int(oc->nb_chapters)) {
+                        av_log(NULL, AV_LOG_FATAL, "Invalid chapter index %d in metadata specifier.\n", index);
+                        exit(1);
+                    }
+                    m = &oc->chapters[index]->metadata;
+                    break;
+                case 'p':
+                    if (index < 0 || index >= int(oc->nb_programs)) {
+                        av_log(NULL, AV_LOG_FATAL, "Invalid program index %d in metadata specifier.\n", index);
+                        exit(1);
+                    }
+                    m = &oc->programs[index]->metadata;
+                    break;
+                default:
+                    av_log(NULL, AV_LOG_FATAL, "Invalid metadata specifier %s.\n", o->metadata[i].specifier);
+                    exit(1);
+                }
+                av_dict_set(m, (char*)o->metadata[i].u.str, *val ? val : NULL, 0);
+            }
+        }
+
+    return 0;
 }
 
 int ConvertThread::transcode()
 {
+    //TODO transcode
+
 
     return -1;
 }
@@ -635,6 +869,60 @@ void ConvertThread::assert_avoptions(AVDictionary *m)
     if ((t = av_dict_get(m, "", NULL, AV_DICT_IGNORE_SUFFIX))) {
         av_log(NULL, AV_LOG_FATAL, "Option %s not found.\n", t->key);
         exit(1);
+    }
+}
+
+int ConvertThread::read_yesno()
+{
+    int c = getchar();
+    int yesno = (av_toupper(c) == 'Y');
+
+    while (c != '\n' && c != EOF)
+        c = getchar();
+
+    return yesno;
+}
+
+void ConvertThread::assert_file_overwrite(const char *filename)
+{
+    const char *proto_name = avio_find_protocol_name(filename);
+
+    if (paramCtx.file_overwrite && paramCtx.no_file_overwrite) {
+        fprintf(stderr, "Error, both -y and -n supplied. Exiting.\n");
+        exit(1);
+    }
+
+    if (!paramCtx.file_overwrite) {
+        if (proto_name && !strcmp(proto_name, "file") && avio_check(filename, 0) == 0) {
+            if (paramCtx.stdin_interaction && !paramCtx.no_file_overwrite) {
+                fprintf(stderr,"File '%s' already exists. Overwrite ? [y/N] ", filename);
+                fflush(stderr);
+                //term_exit();
+                //signal(SIGINT, SIG_DFL);
+                if (!read_yesno()) {
+                    av_log(NULL, AV_LOG_FATAL, "Not overwriting - exiting\n");
+                    exit(1);
+                }
+                //term_init();
+            }
+            else {
+                av_log(NULL, AV_LOG_FATAL, "File '%s' already exists. Exiting.\n", filename);
+                exit(1);
+            }
+        }
+    }
+
+    if (proto_name && !strcmp(proto_name, "file")) {
+        for (int i = 0; i < paramCtx.nb_input_files; i++) {
+            InputFile *file = paramCtx.input_files[i];
+            if (file->ctx->iformat->flags & AVFMT_NOFILE)
+                continue;
+            if (!strcmp(filename, file->ctx->url)) {
+                av_log(NULL, AV_LOG_FATAL, "Output %s same as Input #%d - exiting\n", filename, i);
+                av_log(NULL, AV_LOG_WARNING, "FFmpeg cannot edit existing files in-place.\n");
+                exit(1);
+            }
+        }
     }
 }
 

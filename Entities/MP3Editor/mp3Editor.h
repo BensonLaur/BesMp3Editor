@@ -96,6 +96,9 @@ private:
 
     void assert_avoptions(AVDictionary *m);
 
+    int read_yesno(void);
+
+    void assert_file_overwrite(const char *filename);
 
 
 private:
