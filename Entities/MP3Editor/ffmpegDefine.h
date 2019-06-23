@@ -27,6 +27,9 @@ extern "C"
 #include "libavutil/pixdesc.h"
 #include "libavutil/eval.h"
 #include "libavutil/fifo.h"
+#include "libavutil/time.h"
+#include "libavutil/timestamp.h"
+#include "libavutil/bprint.h"
 #include "SDL.h"
 }
 
@@ -51,6 +54,10 @@ extern "C"
 
 #define VSYNC_AUTO       -1
 #define VSYNC_PASSTHROUGH 0
+#define VSYNC_CFR         1
+#define VSYNC_VFR         2
+#define VSYNC_VSCFR       0xfe
+#define VSYNC_DROP        0xff
 #define DEFAULT_PASS_LOGFILENAME_PREFIX "ffmpeg2pass"
 
 
@@ -648,17 +655,47 @@ public:
     int copy_ts           = 0;
     int start_at_zero     = 0;
 
-    int file_overwrite     = 0;
+    int file_overwrite     = 1;   //直接重写覆盖
     int no_file_overwrite  = 0;
     int stdin_interaction = 1;
 
     int input_stream_potentially_available = 0;
+    int audio_sync_method = 0;
     int video_sync_method = VSYNC_AUTO;
     int frame_bits_per_raw_sample = 0;
+
+
+    AVIOContext *progress_avio = NULL;
+
+ typedef struct HWDevice {
+     char *name;
+     enum AVHWDeviceType type;
+     AVBufferRef *device_ref;
+ } HWDevice;
+
+    AVBufferRef *hw_device_ctx;
+    int nb_hw_devices;
+    HWDevice **hw_devices;
+
+
+    float dts_delta_threshold   = 10;
+    float dts_error_threshold   = 3600*30;
 
     //static
     int intra_only         = 0;
     int do_psnr            = 0;
+    int do_pkt_dump        = 0;
+    int do_hex_dump       = 0;
+    int exit_on_error      = 0;
+
+    int main_return_code = 0;
+    int print_stats       = -1;
+
+    int nb_frames_drop = 0;
+
+    int qp_hist           = 0;
+
+    int nb_frames_dup = 0;
 }FfmpegParamContext;
 
 /**
@@ -972,6 +1009,19 @@ static int write_option(void *optctx, const OptionDef *po, const char *opt,
 
     return 0;
 }
+
+//暂时只需要这4个选项
+#define OFFSET(x) offsetof(OptionsContext, x)
+const OptionDef options[] = {
+    { "c", HAS_ARG | OPT_STRING | OPT_SPEC |OPT_INPUT | OPT_OUTPUT,   (void*)OFFSET(codec_names) ,//{ .off       = OFFSET(codec_names) },
+            "codec name", "codec" },
+    { "map", HAS_ARG | OPT_EXPERT | OPT_PERFILE |OPT_OUTPUT,    opt_map,   // { .func_arg = opt_map },
+            "set input stream mapping",
+            "[-]input_file_id[:stream_specifier][,sync_file_id[:stream_specifier]]" },
+    { "metadata", HAS_ARG | OPT_STRING | OPT_SPEC | OPT_OUTPUT, (void*)OFFSET(metadata),//{ .off = OFFSET(metadata) },
+            "add metadata", "string=string" },
+    { NULL, },
+};
 
 static int parse_optgroup(void *optctx, OptionGroup *g, void* paramCtx)
 {

@@ -39,6 +39,10 @@ public:
     ConvertThread(QObject* parent = nullptr):QThread(parent) {}
 
     void SetConvertedData(QString filePath, const CustomMp3Data &customMp3Data);
+
+signals:
+    void sig_getEditResult(bool success, QString path, QString errorTip);
+
 protected:
     virtual void run();
 
@@ -67,8 +71,43 @@ private:
     int open_files(OptionGroupList *l, bool isInput);
     int open_input_file(OptionsContext *o, const char *filename);
     int open_output_file(OptionsContext *o, const char *filename);
+
+    int init_input_stream(int ist_index);
+    InputStream *get_input_stream(OutputStream *ost);
+    int init_output_stream_streamcopy(OutputStream *ost);
+    int check_init_output_file(OutputFile *of, int file_index);
+    int init_output_stream(OutputStream *ost/*, char *error, int error_len*/);
+    int transcode_init();
+    void close_output_stream(OutputStream *ost);
+    int need_output(void);
+    OutputStream *choose_output(void);
+    int get_input_packet(InputFile *f, AVPacket *pkt);
+    void reset_eagain(void);
+    void report_new_stream(int input_index, AVPacket *pkt);
+
+    int sub2video_get_blank_frame(InputStream *ist);
+    void sub2video_copy_rect(uint8_t *dst, int dst_linesize, int w, int h,AVSubtitleRect *r);
+    void sub2video_push_ref(InputStream *ist, int64_t pts);
+    void sub2video_update(InputStream *ist, AVSubtitle *sub);
+    void sub2video_heartbeat(InputStream *ist, int64_t pts);
+
+    int check_output_constraints(InputStream *ist, OutputStream *ost);
+    void close_all_output_streams(OutputStream *ost, OSTFinished this_stream, OSTFinished others);
+    void write_packet(OutputFile *of, AVPacket *pkt, OutputStream *ost, int unqueue);
+    void output_packet(OutputFile *of, AVPacket *pkt,OutputStream *ost, int eof);
+    void do_streamcopy(InputStream *ist, OutputStream *ost, const AVPacket *pkt);
+    int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eof);
+
+    void print_final_stats(int64_t total_size);
+    void print_report(int is_last_report, int64_t timer_start, int64_t cur_time);
+
+    void finish_output_stream(OutputStream *ost);
+    int process_input(int file_index);
+    int transcode_step(void);
     int transcode();
 
+
+    void hw_device_free_all(void);
 private:
     void avformat_get_context_defaults(AVFormatContext *s);
 
@@ -100,6 +139,8 @@ private:
 
     void assert_file_overwrite(const char *filename);
 
+    void uninit_parse_context(OptionParseContext *octx);
+
 
 private:
     QString inputMp3Path;
@@ -120,13 +161,13 @@ private:
     AVDictionary *format_opts, *codec_opts, *resample_opts;
 
 #define OFFSET(x) offsetof(OptionsContext, x)
-    OptionDef optionMap = { "map", HAS_ARG | OPT_EXPERT | OPT_PERFILE |OPT_OUTPUT,opt_map};
-    OptionDef optionCodecName = { "c", HAS_ARG | OPT_STRING | OPT_SPEC |
-            OPT_INPUT | OPT_OUTPUT, (void*)OFFSET(codec_names)};//{ .off       = OFFSET(codec_names) }};
-    OptionDef optionMetadata = { "metadata",
-                                 HAS_ARG | OPT_STRING | OPT_SPEC | OPT_OUTPUT, (void*)OFFSET(metadata),//{ .off = OFFSET(metadata) },
-            "add metadata", "string=string" };
-
+    OptionDef optionMap = { "map", HAS_ARG | OPT_EXPERT | OPT_PERFILE |OPT_OUTPUT,    opt_map,   // { .func_arg = opt_map },
+            "set input stream mapping",
+            "[-]input_file_id[:stream_specifier][,sync_file_id[:stream_specifier]]" };
+    OptionDef optionCodecName = { "c", HAS_ARG | OPT_STRING | OPT_SPEC |OPT_INPUT | OPT_OUTPUT,   (void*)OFFSET(codec_names) ,//{ .off       = OFFSET(codec_names) },
+                                  "codec name", "codec" };
+    OptionDef optionMetadata = { "metadata", HAS_ARG | OPT_STRING | OPT_SPEC | OPT_OUTPUT, (void*)OFFSET(metadata),//{ .off = OFFSET(metadata) },
+                                 "add metadata", "string=string" };
 
     FfmpegParamContext paramCtx;
 };
@@ -144,6 +185,9 @@ public:
 
 signals:
     void sig_getEditResult(bool success, QString path, QString errorTip);
+
+private:
+    void OnGetEditReuslt(bool success, QString path, QString errorTip);
 
 private:
     QString sourceMp3;
