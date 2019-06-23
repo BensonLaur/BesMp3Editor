@@ -26,6 +26,7 @@ MainWindow::~MainWindow()
 
 void MainWindow::initEntity()
 {
+    this->setWindowTitle(tr("MP3 Editor"));
     ui->slider_current_music_position->setRange(0,1000);
 
     musicPlayer = new MusicPlayer(this);
