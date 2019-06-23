@@ -8,7 +8,7 @@
 
 # 依赖
 
-依赖库同：[Beslyric-for-x](https://github.com/BensonLaur/Beslyric-for-X)
+依赖库同：[Beslyric-for-x](https://github.com/BensonLaur/Beslyric-for-X), 详见其开发说明
 
 # 相关
 
