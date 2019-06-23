@@ -2,7 +2,7 @@
 
 测试使用 ffmpeg 编辑 mp3 信息
 
-<img src="https://github.com/BensonLaur/image-storage/raw/master/BesMp3Editor/demp.png" 
+<img src="https://github.com/BensonLaur/image-storage/raw/master/BesMp3Editor/demo.png" 
             width="70%" height="70%">
 
 
