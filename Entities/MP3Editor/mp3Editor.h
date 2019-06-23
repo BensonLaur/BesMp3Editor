@@ -39,7 +39,7 @@ public:
     ConvertThread(QObject* parent = nullptr):QThread(parent) {}
 
     void SetConvertedData(QString filePath, const CustomMp3Data &customMp3Data);
-
+	int GetProcessingPercentage();
 signals:
     void sig_getEditResult(bool success, QString path, QString errorTip);
 
@@ -185,13 +185,16 @@ public:
 
 signals:
     void sig_getEditResult(bool success, QString path, QString errorTip);
-
+	void sig_processChange(int percentage);
 private:
     void OnGetEditReuslt(bool success, QString path, QString errorTip);
-
+	void OnSendProcessing();
 private:
     QString sourceMp3;
     ConvertThread* convertThread;
+
+	QTimer  processTimer;    //通知进度改变的 Timer
+	int nLastPercentage = 0;
 };
 
 #endif // MP3_EDITOR_H

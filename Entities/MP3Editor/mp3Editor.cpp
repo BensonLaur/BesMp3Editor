@@ -11,6 +11,19 @@ void ConvertThread::SetConvertedData(QString filePath, const CustomMp3Data &cust
     customData = customMp3Data;
 }
 
+int ConvertThread::GetProcessingPercentage()
+{
+	int percentage = int(paramCtx.percentage * 100);
+	if (percentage >= 100)
+	{
+		if (paramCtx.finish == false)
+			percentage = 99;
+		else
+			percentage = 100;
+	}
+	return percentage;
+}
+
 void ConvertThread::run()
 {
     QString errorCause;
@@ -40,10 +53,12 @@ fail:
         emit sig_getEditResult(false, inputMp3Path , errorCause);
     else
         emit sig_getEditResult(true, outputMp3Path , "success");
+
 }
 
 void ConvertThread::ResetToInitAll()
 {
+	paramCtx = FfmpegParamContext();
     sws_dict = swr_opts = format_opts = codec_opts = resample_opts = NULL;
 }
 
@@ -142,6 +157,7 @@ void ConvertThread::ReleaseAll()
 
     //avformat_network_deinit();
 
+	paramCtx.finish = true;
 }
 
 int ConvertThread::ffmpeg_parse_options()
@@ -152,9 +168,12 @@ int ConvertThread::ffmpeg_parse_options()
 
     buildOptionContent(&octx);
 
-    //loglevel
-    av_log_set_flags(AV_LOG_SKIP_REPEATED);
-    av_log_set_level(AV_LOG_TRACE);
+	//loglevel
+	if(paramCtx.openAvLog)
+	{ 
+		av_log_set_flags(AV_LOG_SKIP_REPEATED);
+		av_log_set_level(paramCtx.logLevel);
+	}
 
     //打开输入的文件（mp3 和 图片）
     ret = open_files(&octx.groups[GROUP_INFILE], true);
@@ -573,6 +592,9 @@ int ConvertThread::open_input_file(OptionsContext *o, const char *filename)
         /* If not enough info to get the stream parameters, we decode the
            first frames to get it. (used in mpeg case for example) */
         ret = avformat_find_stream_info(ic, opts);
+
+		if (ic->streams[0]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+			paramCtx.totalAudioByte = ic->duration / 1000000 * ic->bit_rate / 8;
 
         for (i = 0; i < orig_nb_streams; i++)
             av_dict_free(&opts[i]);
@@ -1216,6 +1238,12 @@ int ConvertThread::need_output()
         OutputStream *ost    = paramCtx.output_streams[i];
         OutputFile *of       = paramCtx.output_files[ost->file_index];
         AVFormatContext *os  = paramCtx.output_files[ost->file_index]->ctx;
+		
+		if (i == 0)
+		{	//搜集音频当前已复制的数据量，计算进度
+			paramCtx.transAudioByte = ost->data_size;
+			paramCtx.percentage = 1.0 * paramCtx.transAudioByte / paramCtx.totalAudioByte;
+		}
 
         uint64_t value = os->pb && avio_tell(os->pb);
         if (ost->finished ||
@@ -2709,6 +2737,10 @@ Mp3Editor::Mp3Editor(QObject *parent):QObject(parent)
     convertThread = new ConvertThread(this);
 
     connect(convertThread, &ConvertThread::sig_getEditResult, this, &Mp3Editor::OnGetEditReuslt);
+
+	processTimer.setInterval(100);
+	connect(&processTimer, &QTimer::timeout, this, &Mp3Editor::OnSendProcessing);
+
 }
 
 Mp3Editor::~Mp3Editor()
@@ -2728,13 +2760,11 @@ bool Mp3Editor::CustomizeMp3(QString filePath, const CustomMp3Data &customData)
 //    cusData.title = "bsTitle";
 //    filePath = "E:/openSourceGit/msvc/bin/x86/a.mp3";
 
-    //TODO:下一步解决名字读取缺失问题
-    //TODO:然后解决多次加载访问异常问题
     //TODO:添加转换进度消息
-    //TODO:线程优先级 太高会不会影响音乐播放
 
+	processTimer.start();
     convertThread->SetConvertedData(filePath, cusData);
-    convertThread->start(QThread::Priority::HighestPriority);
+    convertThread->start(QThread::Priority::IdlePriority);
 
     return false;
 }
@@ -2742,4 +2772,15 @@ bool Mp3Editor::CustomizeMp3(QString filePath, const CustomMp3Data &customData)
 void Mp3Editor::OnGetEditReuslt(bool success, QString path, QString errorTip)
 {
     emit sig_getEditResult(success, path, errorTip);
+	processTimer.stop();
+}
+
+void Mp3Editor::OnSendProcessing()
+{
+	int p = convertThread->GetProcessingPercentage();
+	if (p != nLastPercentage)
+	{
+		nLastPercentage = p;
+		emit sig_processChange(p);
+	}
 }

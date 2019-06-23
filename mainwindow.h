@@ -35,6 +35,7 @@ private slots:
 
     void onGetEditResult(bool success, QString path, QString errorTip);
 
+	void onProcessingChange(int percentage);
 private:
     void showPosition(int position);
 

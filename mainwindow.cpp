@@ -45,7 +45,9 @@ void MainWindow::initConnection()
     connect(musicPlayer, &MusicPlayer::albumFound, this, &MainWindow::onSetMusicAlbum);
     connect(musicPlayer, &MusicPlayer::pictureFound, this, &MainWindow::changePic);
 
-    connect(mp3Editor, &Mp3Editor::sig_getEditResult, this, &MainWindow::onGetEditResult);
+	connect(mp3Editor, &Mp3Editor::sig_getEditResult, this, &MainWindow::onGetEditResult);
+	connect(mp3Editor, &Mp3Editor::sig_processChange, this, &MainWindow::onProcessingChange);
+	
 }
 
 void MainWindow::durationChanged(qint64 duration)
@@ -115,6 +117,11 @@ void MainWindow::onGetEditResult(bool success, QString path, QString errorTip)
     }
 
     ui->label_output_music_path->setText(path);
+}
+
+void  MainWindow::onProcessingChange(int percentage)
+{
+	ui->slider_current_music_position->setValue(percentage*10);
 }
 
 void MainWindow::showPosition(int position)

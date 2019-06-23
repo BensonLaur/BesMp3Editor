@@ -696,6 +696,15 @@ public:
     int qp_hist           = 0;
 
     int nb_frames_dup = 0;
+
+	bool openAvLog = true;
+	int logLevel = AV_LOG_DEBUG;
+
+	//globle
+	int totalAudioByte = 0;
+	int transAudioByte = 0;
+	double percentage = 0.0;
+	bool finish = false;
 }FfmpegParamContext;
 
 /**
