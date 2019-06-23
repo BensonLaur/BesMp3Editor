@@ -5,11 +5,12 @@
 #-------------------------------------------------
 
 QT       += core gui
-CONFIG +=console
+#CONFIG +=console
+UI_DIR=./UI
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
-TARGET = MP3Editor
+TARGET = BesMp3Editor
 TEMPLATE = app
 
 # The following define makes your compiler emit warnings if you use
@@ -33,3 +34,14 @@ HEADERS  += mainwindow.h \
         global.h \
 
 FORMS    += mainwindow.ui
+
+DISTFILES += \
+    BesMp3Editor.rc
+
+# windows icon and exe file infomation
+win32{
+RC_FILE = BesMp3Editor.rc
+}
+
+RESOURCES += \
+    resource.qrc

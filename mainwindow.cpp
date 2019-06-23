@@ -26,8 +26,11 @@ MainWindow::~MainWindow()
 
 void MainWindow::initEntity()
 {
-    this->setWindowTitle(tr("MP3 Editor"));
+    this->setWindowIcon(QIcon(":/BesMp3Editor.ico"));
+    this->setWindowTitle(tr("BesMP3Editor"));
     ui->slider_current_music_position->setRange(0,1000);
+    ui->label_src_tip->setOpenExternalLinks(true);
+    ui->label_readme->setOpenExternalLinks(true);
 
     musicPlayer = new MusicPlayer(this);
     musicPlayer->setNotifyInterval(33);

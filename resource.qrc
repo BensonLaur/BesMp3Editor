@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/">
+        <file>BesMp3Editor.ico</file>
+    </qresource>
+</RCC>

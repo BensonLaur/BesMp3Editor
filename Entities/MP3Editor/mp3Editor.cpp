@@ -288,6 +288,8 @@ void ConvertThread::buildOptionContent(OptionParseContext *octx)
         add_opt(octx,&optionMap,"map","0:0"); //音乐文件#0的音频流(0)
         add_opt(octx,&optionMap,"map","1:0"); //图片文件#1的视频流(0)
     }
+    else
+        add_opt(octx,&optionMap,"map","0:0"); //音乐文件#0的音频流(0)
 
     if( !customData.artist.isEmpty()|| !customData.title.isEmpty()||!customData.album.isEmpty())
     {
