@@ -44,6 +44,17 @@ extern "C"
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswresample/swresample.h>
+#include "libavutil/opt.h"
+#include "libavutil/mem.h"
+#include "libavutil/avstring.h"
+#include "libavutil/intreadwrite.h"
+#include "libavutil/parseutils.h"
+#include "libavutil/pixdesc.h"
+#include "libavutil/eval.h"
+#include "libavutil/fifo.h"
+#include "libavutil/time.h"
+#include "libavutil/timestamp.h"
+#include "libavutil/bprint.h"
 #include "SDL.h"
 #ifdef __cplusplus
 }
@@ -130,7 +141,7 @@ typedef struct InputStream {
     int reinit_filters;
 
     /* hwaccel options */
-    enum HWAccelID hwaccel_id;
+    //enum HWAccelID hwaccel_id;
     enum AVHWDeviceType hwaccel_device_type;
     char  *hwaccel_device;
     enum AVPixelFormat hwaccel_output_format;
@@ -1024,7 +1035,7 @@ static int write_option(void *optctx, const OptionDef *po, const char *opt,
 const OptionDef options[] = {
     { "c", HAS_ARG | OPT_STRING | OPT_SPEC |OPT_INPUT | OPT_OUTPUT,   (void*)OFFSET(codec_names) ,//{ .off       = OFFSET(codec_names) },
             "codec name", "codec" },
-    { "map", HAS_ARG | OPT_EXPERT | OPT_PERFILE |OPT_OUTPUT,    opt_map,   // { .func_arg = opt_map },
+    { "map", HAS_ARG | OPT_EXPERT | OPT_PERFILE |OPT_OUTPUT,    (void*)opt_map,   // { .func_arg = opt_map },
             "set input stream mapping",
             "[-]input_file_id[:stream_specifier][,sync_file_id[:stream_specifier]]" },
     { "metadata", HAS_ARG | OPT_STRING | OPT_SPEC | OPT_OUTPUT, (void*)OFFSET(metadata),//{ .off = OFFSET(metadata) },
@@ -1250,7 +1261,7 @@ static OutputStream *new_output_stream(OptionsContext *o, AVFormatContext *oc, e
         exit(1);
     }
 
-    if (oc->nb_streams - 1 < unsigned int(o->nb_streamid_map))
+    if (oc->nb_streams - 1 < (unsigned int)(o->nb_streamid_map))
         st->id = o->streamid_map[oc->nb_streams - 1];
 
     GROW_ARRAY_2(paramCtx->output_streams, paramCtx->nb_output_streams,OutputStream *);
