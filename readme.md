@@ -5,7 +5,6 @@
 <img src="https://github.com/BensonLaur/image-storage/raw/master/BesMp3Editor/demo.png" 
             width="70%" height="70%">
 
-
 # 依赖
 
 依赖库同：[Beslyric-for-x](https://github.com/BensonLaur/Beslyric-for-X), 详见其开发说明
